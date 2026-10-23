@@ -24,7 +24,7 @@ function formatEth(wei: bigint, digits = 6) {
 }
 
 function parseEth(value: string): bigint {
-  if (!/^(?:0|[1-9]\\d*)(?:\\.\\d{1,18})?$/.test(value)) {
+  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(value)) {
     throw new Error('Enter a valid ETH amount with up to 18 decimal places.');
   }
   const [whole, fraction = ''] = value.split('.');
@@ -68,6 +68,35 @@ export function WalletPanel() {
     const timer = window.setInterval(() => void refreshBalance(address), 30_000);
     return () => window.clearInterval(timer);
   }, [address, onMainnet, refreshBalance]);
+
+  useEffect(() => {
+    const provider = window.ethereum;
+    if (!provider?.on) return;
+    const onChainChanged = (nextChain: unknown) => {
+      const value = String(nextChain);
+      setChainId(value);
+      setGasFeeWei(null);
+      setEstimatedValueWei(null);
+      setMessage(value === MAINNET_CHAIN_ID ? 'Ethereum Mainnet selected.' : 'Network changed. Switch back to Ethereum Mainnet before sending.');
+    };
+    const onAccountsChanged = (nextAccounts: unknown) => {
+      const accounts = Array.isArray(nextAccounts) ? nextAccounts : [];
+      const nextAddress = typeof accounts[0] === 'string' && ADDRESS_RE.test(accounts[0]) ? accounts[0] : '';
+      setAddress(nextAddress);
+      setBalanceWei(null);
+      setGasFeeWei(null);
+      setEstimatedValueWei(null);
+      setTxHash('');
+      setTxStatus('');
+      setMessage(nextAddress ? 'Wallet account changed.' : 'Wallet disconnected from this site.');
+    };
+    provider.on('chainChanged', onChainChanged);
+    provider.on('accountsChanged', onAccountsChanged);
+    return () => {
+      provider.removeListener?.('chainChanged', onChainChanged);
+      provider.removeListener?.('accountsChanged', onAccountsChanged);
+    };
+  }, []);
 
   const connect = async () => {
     setMessage('');
@@ -142,6 +171,20 @@ export function WalletPanel() {
 
   const sendEth = async () => {
     if (!window.ethereum || !address || !onMainnet || estimatedValueWei === null) return;
+    const [actualChain, actualAccounts] = await Promise.all([
+      window.ethereum.request({ method: 'eth_chainId' }) as Promise<string>,
+      window.ethereum.request({ method: 'eth_accounts' }) as Promise<string[]>,
+    ]);
+    if (actualChain !== MAINNET_CHAIN_ID) {
+      setChainId(actualChain);
+      setMessage('The wallet network changed. Switch to Ethereum Mainnet and review the transfer again.');
+      return;
+    }
+    if (!actualAccounts[0] || actualAccounts[0].toLowerCase() !== address.toLowerCase()) {
+      setAddress(actualAccounts[0] || '');
+      setMessage('The active wallet account changed. Review the transfer again.');
+      return;
+    }
     const fee = gasFeeWei ?? 0n;
     const summary = `Send ${formatEth(estimatedValueWei)} ETH\nTo: ${recipient}\nEstimated network fee: ${formatEth(fee, 8)} ETH\n\nMetaMask will ask for final approval. Continue to MetaMask?`;
     if (!window.confirm(summary)) return;
@@ -150,6 +193,14 @@ export function WalletPanel() {
     setTxHash('');
     setTxStatus('Waiting for MetaMask approval…');
     try {
+      const [sendChain, sendAccounts] = await Promise.all([
+        window.ethereum.request({ method: 'eth_chainId' }) as Promise<string>,
+        window.ethereum.request({ method: 'eth_accounts' }) as Promise<string[]>,
+      ]);
+      if (sendChain !== MAINNET_CHAIN_ID || !sendAccounts[0] || sendAccounts[0].toLowerCase() !== address.toLowerCase()) {
+        setChainId(sendChain);
+        throw new Error('Wallet account or network changed. No transaction was sent; review the transfer again.');
+      }
       const hash = await window.ethereum.request({
         method: 'eth_sendTransaction',
         params: [{ from: address, to: recipient, value: `0x${estimatedValueWei.toString(16)}` }],
