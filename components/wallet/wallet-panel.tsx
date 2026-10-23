@@ -171,10 +171,17 @@ export function WalletPanel() {
 
   const sendEth = async () => {
     if (!window.ethereum || !address || !onMainnet || estimatedValueWei === null) return;
-    const [actualChain, actualAccounts] = await Promise.all([
-      window.ethereum.request({ method: 'eth_chainId' }) as Promise<string>,
-      window.ethereum.request({ method: 'eth_accounts' }) as Promise<string[]>,
-    ]);
+    let actualChain: string;
+    let actualAccounts: string[];
+    try {
+      [actualChain, actualAccounts] = await Promise.all([
+        window.ethereum.request({ method: 'eth_chainId' }) as Promise<string>,
+        window.ethereum.request({ method: 'eth_accounts' }) as Promise<string[]>,
+      ]);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not verify the active wallet and network.');
+      return;
+    }
     if (actualChain !== MAINNET_CHAIN_ID) {
       setChainId(actualChain);
       setMessage('The wallet network changed. Switch to Ethereum Mainnet and review the transfer again.');
